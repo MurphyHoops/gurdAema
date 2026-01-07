@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Copy, Check, FileCode, Activity, Music, Database, Layout, Download } from 'lucide-react';
+import { X, Copy, Check, FileCode, Activity, Music, Database, Layout } from 'lucide-react';
 import { SOURCE_VAULT } from '../utils/sourceCodeData';
 
 interface Props {
@@ -38,26 +38,6 @@ const SourceCodeModal: React.FC<Props> = ({ onClose }) => {
         navigator.clipboard.writeText(SOURCE_FILES[activeTab].code);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-    };
-
-    const handleDownload = () => {
-        try {
-            const item = SOURCE_FILES[activeTab];
-            const blob = new Blob([item.code], {type: 'text/plain'});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = item.name;
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => {
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }, 100);
-        } catch(e) {
-            console.error("Download failed", e);
-        }
     };
 
     return (
@@ -105,22 +85,13 @@ const SourceCodeModal: React.FC<Props> = ({ onClose }) => {
                     <div className="flex-1 flex flex-col bg-[#1e1e1e]">
                         <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-900">
                              <span className="text-xs text-slate-400 font-mono">{SOURCE_FILES[activeTab].name}</span>
-                             <div className="flex gap-2">
-                                 <button 
-                                    onClick={handleDownload}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs transition-colors border border-slate-700"
-                                    title="下载此文件"
-                                 >
-                                     <Download size={14}/> Download
-                                 </button>
-                                 <button 
-                                    onClick={handleCopy}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition-colors"
-                                 >
-                                     {copied ? <Check size={14}/> : <Copy size={14}/>}
-                                     {copied ? 'Copied' : 'Copy Source'}
-                                 </button>
-                             </div>
+                             <button 
+                                onClick={handleCopy}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition-colors"
+                             >
+                                 {copied ? <Check size={14}/> : <Copy size={14}/>}
+                                 {copied ? 'Copied' : 'Copy Source'}
+                             </button>
                         </div>
                         <div className="flex-1 overflow-auto p-4 custom-scrollbar">
                             <pre className="text-[11px] font-mono text-slate-300 leading-relaxed whitespace-pre-wrap select-text">

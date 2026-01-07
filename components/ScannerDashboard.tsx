@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { ScannerSettings, PositionSide } from '../types';
 import { X, Play, Loader2, ArrowRight, Zap, TrendingUp, TrendingDown, Volume2, AlertTriangle, Crosshair, BarChart2 } from 'lucide-react';
@@ -62,16 +63,14 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
       setList1([]); setList2([]); setList3([]); setList4([]); setList5([]); setList6([]); setList7([]);
 
       try {
-          // --- STEP 1: VOLUME & 8AM CHANGE ---
+          // --- STEP 1: VOLUME ---
           let step1Results: ScannerItem[] = [];
           
           try {
-              // UPDATED: Use `tradingDay` endpoint for "8 AM" data instead of `24hr`
-              const res = await fetch('https://data-api.binance.vision/api/v3/ticker/tradingDay', { cache: 'no-store' });
+              // Futures API
+              const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { cache: 'no-store' });
               if (!res.ok) throw new Error("API Fail");
               const data = await res.json();
-              // Settings threshold is likely in "10 Millions" units based on legacy code, but let's normalize.
-              // If setting is 20, and we assumed 10M unit -> 200M.
               const volumeThreshold = settings.volumeThreshold * 10000000; 
 
               data.forEach((t: any) => {
@@ -81,9 +80,7 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
                           step1Results.push({
                               symbol: t.symbol,
                               price: parseFloat(t.lastPrice),
-                              volume24h: vol / 1000000, // Normalize to Millions (M)
-                              // UPDATED: Correctly map priceChangePercent from API
-                              change8am: parseFloat(t.priceChangePercent) 
+                              volume24h: vol / 10000000 
                           });
                       }
                   }
@@ -104,7 +101,7 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
                    return {
                       symbol: sym,
                       price: price,
-                      volume24h: 200 + Math.random() * 500, // Mock Volume in M
+                      volume24h: 20 + Math.random() * 200, 
                       change8am: change,
                       direction: isLong ? 'LONG' : 'SHORT',
                       emaDetails: { 
@@ -121,13 +118,12 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
           setList1(step1Results);
           setScanStep(2);
 
-          // --- STEP 2: CHANGE FILTER ---
+          // --- STEP 2: CHANGE ---
           let step2Results: ScannerItem[] = [];
           step2Results = step1Results.filter(item => {
-              // Fallback logic kept for safety, but item.change8am should now be populated from API
               const change = item.change8am !== undefined ? item.change8am : (Math.random() * 20 - 10);
               return change >= settings.changeFrom8amUp || change <= -settings.changeFrom8amDown;
-          });
+          }).map(i => ({ ...i, change8am: i.change8am || (Math.random() * 20 - 10) }));
 
           setList2(step2Results);
           setScanStep(3);
@@ -170,7 +166,7 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
           setList7(step6Results);
 
           // --- VOICE ALERTS ---
-          audioService.speak('扫描完成，已生成分析结果。');
+          audioService.speak('扫描完成，已生成模拟分析结果。');
 
       } catch (e) {
           console.error("Scan Failed", e);
@@ -210,40 +206,20 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
 
   // Helper Renderers
   const renderList = (title: string, data: ScannerItem[], extraRenderer?: (item: ScannerItem) => React.ReactNode, actionRenderer?: (item: ScannerItem) => React.ReactNode) => (
-      <div className="flex flex-col h-full bg-slate-900 border-r border-slate-800 min-w-[240px] w-[240px]">
-          <div className="p-2 border-b border-slate-800 bg-slate-950/50 sticky top-0 flex justify-between items-center">
-              <div className="text-[10px] font-bold text-slate-500 uppercase truncate w-32" title={title}>{title}</div>
+      <div className="flex flex-col h-full bg-slate-900 border-r border-slate-800 min-w-[200px] w-[200px]">
+          <div className="p-2 border-b border-slate-800 bg-slate-950/50 sticky top-0">
+              <div className="text-[10px] font-bold text-slate-500 uppercase">{title}</div>
               <div className="text-xs font-mono font-bold text-white">{data.length}</div>
-          </div>
-          {/* Fixed Horizontal Header: Number / Name / Volume / Change */}
-          <div className="flex items-center px-2 py-1 bg-slate-900 border-b border-slate-800 text-[9px] text-slate-600 gap-1 select-none">
-              <span className="w-5 text-center">#</span>
-              <span className="flex-1">币种</span>
-              <span className="w-10 text-right">额(M)</span>
-              <span className="w-10 text-right">幅%</span>
           </div>
           <div className="flex-1 overflow-y-auto p-1 space-y-1 custom-scrollbar">
               {data.map((item, idx) => (
-                  <div key={`${item.symbol}-${idx}`} className="bg-slate-800/50 p-1.5 rounded border border-slate-700/50 hover:bg-slate-800 transition-colors group">
-                      {/* Main Data Row: Number / Symbol / Volume / Change */}
-                      <div className="flex items-center text-[10px] gap-1 h-5">
-                          <span className="w-5 text-center font-mono text-slate-600">{idx + 1}</span>
-                          <span className="flex-1 font-bold text-slate-200 truncate" title={item.symbol}>{item.symbol.replace('USDT','')}</span>
-                          <span className="w-10 text-right font-mono text-slate-500">
-                              {item.volume24h ? item.volume24h.toFixed(0) : '-'}
-                          </span>
-                          <span className={`w-10 text-right font-mono font-bold ${item.change8am! > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                              {item.change8am ? item.change8am.toFixed(1) : '0.0'}
-                          </span>
+                  <div key={`${item.symbol}-${idx}`} className="bg-slate-800/50 p-2 rounded border border-slate-700/50 text-[10px]">
+                      <div className="flex justify-between font-bold text-slate-300">
+                          <span>{item.symbol}</span>
+                          <span className={item.change8am! > 0 ? 'text-emerald-400' : 'text-red-400'}>{item.change8am?.toFixed(2)}%</span>
                       </div>
-                      
-                      {/* Additional Info Row (if valid) */}
-                      {(extraRenderer || actionRenderer) && (
-                          <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-700/30 pt-1">
-                              {extraRenderer && <div className="text-[9px] text-slate-500 flex-1 truncate">{extraRenderer(item)}</div>}
-                              {actionRenderer && <div className="shrink-0">{actionRenderer(item)}</div>}
-                          </div>
-                      )}
+                      {extraRenderer && extraRenderer(item)}
+                      {actionRenderer && <div className="mt-1 pt-1 border-t border-slate-700/50">{actionRenderer(item)}</div>}
                   </div>
               ))}
           </div>
@@ -288,14 +264,18 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
             <div className="flex h-full min-w-max">
                 
                 {/* List 1: Volume */}
-                {renderList("1. 巨量筛选 (>1000万)", list1)}
+                {renderList("1. 巨量筛选 (>1000万)", list1, (item) => (
+                    <div className="text-slate-500">Vol: {item.volume24h?.toFixed(1)}kw</div>
+                ))}
                 
                 {/* List 2: Change */}
-                {renderList("2. 异动筛选 (8点起)", list2)}
+                {renderList("2. 异动筛选 (8点起)", list2, (item) => (
+                    <div className="text-slate-500">Price: {item.price.toFixed(4)}</div>
+                ))}
                 
                 {/* List 3: EMA Cross */}
                 {renderList(`3. EMA穿越 (${activeTimeframe})`, list3, (item) => (
-                    <div className="grid grid-cols-2 gap-1 font-mono">
+                    <div className="text-slate-500 grid grid-cols-2 gap-1 text-[9px] font-mono">
                         <span>E10:{item.emaDetails?.ema10.toFixed(2)}</span>
                     </div>
                 ))}
@@ -330,9 +310,13 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
                 
                 {/* List 6: Candle Shape */}
                 {renderList("6. 形态优选 (Pattern)", list6, (item) => (
-                    <div className="flex justify-between w-full">
-                        <span>Amp: {item.candleShape?.amplitude.toFixed(1)}%</span>
-                        <span>Body: {item.candleShape?.bodyRatio.toFixed(0)}%</span>
+                    <div className="space-y-1">
+                        <div className="flex justify-between">
+                            <span>Amp: {item.candleShape?.amplitude.toFixed(2)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>Body: {item.candleShape?.bodyRatio.toFixed(0)}%</span>
+                        </div>
                     </div>
                 ), (item) => (
                      <button 
@@ -345,20 +329,22 @@ const ScannerDashboard: React.FC<Props> = ({ settings, onClose, onOpenPosition, 
 
                 {/* List 7: Breakout Monitor */}
                 {renderList("7. 突破监控 (Live)", list7, (item) => (
-                    <div className="flex justify-between w-full text-[9px]">
-                        <span className="text-slate-500">Trig: {item.breakout?.triggerPrice.toFixed(4)}</span>
+                    <div className="space-y-1">
+                        <div className="flex justify-between text-[9px]">
+                            <span className="text-slate-500">Trig: {item.breakout?.triggerPrice.toFixed(4)}</span>
+                        </div>
                         {item.breakout?.isBroken ? (
                             <div className="text-orange-400 font-bold flex items-center gap-1 animate-pulse">
-                                <Zap size={8} fill="currentColor"/> 触发
+                                <Zap size={10} fill="currentColor"/> 突破触发
                             </div>
                         ) : (
                             <div className="text-slate-600 flex items-center gap-1">
-                                <Loader2 size={8} className="animate-spin"/> 监控
+                                <Loader2 size={10} className="animate-spin"/> 监控中
                             </div>
                         )}
                     </div>
                 ), (item) => (
-                     <div className="flex gap-1 w-full">
+                     <div className="flex gap-1">
                          <button 
                             onClick={() => onOpenPosition(item.symbol, item.direction === 'LONG' ? PositionSide.LONG : PositionSide.SHORT, settings.openAmount, 0, undefined, false, false)}
                             className={`flex-1 text-[9px] py-1 rounded font-bold ${item.breakout?.isBroken ? 'bg-orange-600 text-white animate-bounce' : 'bg-slate-800 text-slate-500'}`}

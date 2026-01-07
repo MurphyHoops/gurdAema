@@ -1,35 +1,62 @@
+
 import React, { useState, useMemo } from 'react';
-import { X, FileText, Activity, Code, Clock, ArrowRight, Search, TrendingUp, TrendingDown, AlertCircle, Calculator, Link, Shield, PieChart, BarChart2 } from 'lucide-react';
+import { X, FileText, Activity, Code, Clock, ArrowRight, Search, TrendingUp, TrendingDown, AlertCircle, Calculator, Link, Shield, PieChart, BarChart2, History, Filter, RotateCcw, Zap, Layers } from 'lucide-react';
 import { TradeLog, SystemEvent, PositionSide, Position } from '../types';
 
 interface Props {
   tradeLogs: TradeLog[];
-  positions: Position[]; // Added active positions for real-time calculation
+  positions: Position[]; 
   systemEvents: SystemEvent[];
   onClose: () => void;
   initialSearch?: string; 
 }
 
+type FilterType = 'ALL' | 'OPEN' | 'WIN' | 'LOSS' | 'RECOVERY' | 'HEDGE' | 'MARTIN';
+
 const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, onClose, initialSearch = '' }) => {
-  // UPDATED: Only one main tab for "TRADES" to strictly show Open/Close records
-  const [activeTab, setActiveTab] = useState<'TRADES'>('TRADES');
   const [selectedLog, setSelectedLog] = useState<TradeLog | null>(null); 
   const [searchTerm, setSearchTerm] = useState(initialSearch);
+  const [activeFilter, setActiveFilter] = useState<FilterType>('ALL');
 
   const groupedLogs = useMemo(() => {
       const term = searchTerm.toLowerCase();
       
-      const sorted = tradeLogs
-          .filter(log => 
-              log.symbol.toLowerCase().includes(term) ||
-              log.entry_id.toLowerCase().includes(term)
-          )
-          .sort((a, b) => {
-              const timeA = a.status === 'CLOSED' ? (a.exit_timestamp || a.entry_timestamp) : a.entry_timestamp;
-              const timeB = b.status === 'CLOSED' ? (b.exit_timestamp || b.entry_timestamp) : b.entry_timestamp;
-              return timeB - timeA;
-          });
+      // 1. Base Filter (Search Text)
+      let filtered = tradeLogs.filter(log => 
+          log.symbol.toLowerCase().includes(term) ||
+          log.entry_id.toLowerCase().includes(term)
+      );
 
+      // 2. Category Filter
+      if (activeFilter !== 'ALL') {
+          filtered = filtered.filter(log => {
+              if (activeFilter === 'OPEN') return log.status === 'OPEN';
+              if (activeFilter === 'WIN') return log.status === 'CLOSED' && (log.profit_usdt || 0) > 0;
+              if (activeFilter === 'LOSS') return log.status === 'CLOSED' && (log.profit_usdt || 0) < 0;
+              if (activeFilter === 'HEDGE') return log.is_hedge;
+              
+              if (activeFilter === 'RECOVERY') {
+                  const r = log.exit_reason || '';
+                  return r.includes('RECOVERY') || r.includes('WIN_ALL') || r.includes('COVER') || r.includes('VICTORY') || r.includes('SAFE_CLR');
+              }
+
+              if (activeFilter === 'MARTIN') {
+                  const r = log.exit_reason || '';
+                  const s = log.signal_details?.type || '';
+                  return r.includes('MARTIN') || s.includes('MARTINGALE');
+              }
+              return true;
+          });
+      }
+
+      // 3. Sort
+      const sorted = filtered.sort((a, b) => {
+          const timeA = a.status === 'CLOSED' ? (a.exit_timestamp || a.entry_timestamp) : a.entry_timestamp;
+          const timeB = b.status === 'CLOSED' ? (b.exit_timestamp || b.entry_timestamp) : b.entry_timestamp;
+          return timeB - timeA;
+      });
+
+      // 4. Grouping Logic (Keep Safe Clear pairs together)
       const result: TradeLog[] = [];
       const processedLogs = new Set<TradeLog>();
 
@@ -62,7 +89,18 @@ const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, on
       }
 
       return result;
-  }, [tradeLogs, searchTerm]);
+  }, [tradeLogs, searchTerm, activeFilter]);
+
+  // Statistics Calculation
+  const stats = useMemo(() => {
+      const closedLogs = groupedLogs.filter(l => l.status === 'CLOSED');
+      const totalPnL = closedLogs.reduce((acc, l) => acc + (l.profit_usdt || 0), 0);
+      const winCount = closedLogs.filter(l => (l.profit_usdt || 0) > 0).length;
+      const totalCount = closedLogs.length;
+      const winRate = totalCount > 0 ? (winCount / totalCount) * 100 : 0;
+      
+      return { totalPnL, winRate, count: groupedLogs.length };
+  }, [groupedLogs]);
 
   const renderJson = (data: any) => {
       return (
@@ -83,36 +121,88 @@ const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, on
       return `${hr}h ${min % 60}m`;
   };
 
+  const FilterChip = ({ type, label, icon: Icon, colorClass }: any) => (
+      <button 
+          onClick={() => setActiveFilter(type)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
+              activeFilter === type 
+              ? `${colorClass} ring-1 ring-offset-1 ring-offset-slate-900 ring-current` 
+              : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+          }`}
+      >
+          {Icon && <Icon size={12} />}
+          {label}
+      </button>
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950 rounded-t-lg">
-          <div className="flex items-center gap-3">
-             <div className="p-2 bg-indigo-900/30 rounded-full text-indigo-400 border border-indigo-500/30">
-                <FileText size={20} />
-             </div>
-             <div>
-                <h2 className="text-lg font-bold text-white">交易日志 (Trade Log)</h2>
-                <p className="text-xs text-slate-500">仅显示开仓与平仓记录</p>
-             </div>
-          </div>
-          <div className="flex items-center gap-4">
-              <div className="relative">
-                  <input 
-                    type="text" 
-                    placeholder="搜索币种..." 
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="bg-slate-800 border border-slate-700 rounded-full pl-8 pr-4 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 w-48"
-                    autoFocus
-                  />
-                  <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-              </div>
-              <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white">
-                <X size={20} />
-              </button>
-          </div>
+        <div className="flex flex-col gap-4 p-4 border-b border-slate-800 bg-slate-950 rounded-t-lg">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-900/30 rounded-full text-indigo-400 border border-indigo-500/30">
+                        <FileText size={20} />
+                    </div>
+                    <div>
+                        <h2 className="text-lg font-bold text-white">交易日志 (Trade Log)</h2>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                            <span>共 {tradeLogs.length} 条记录</span>
+                            <span className="text-slate-700">|</span>
+                            <span>支持多维筛选分析</span>
+                        </div>
+                    </div>
+                </div>
+                <div className="flex items-center gap-4">
+                    <div className="relative">
+                        <input 
+                            type="text" 
+                            placeholder="搜索币种/ID..." 
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="bg-slate-800 border border-slate-700 rounded-full pl-8 pr-4 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 w-48"
+                        />
+                        <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Filter Bar */}
+            <div className="flex flex-wrap items-center gap-2">
+                <FilterChip type="ALL" label="全部" icon={Layers} colorClass="bg-slate-700 text-white border-slate-500" />
+                <FilterChip type="OPEN" label="持仓中" icon={Activity} colorClass="bg-cyan-900/40 text-cyan-400 border-cyan-500/30" />
+                <FilterChip type="WIN" label="盈利" icon={TrendingUp} colorClass="bg-emerald-900/40 text-emerald-400 border-emerald-500/30" />
+                <FilterChip type="LOSS" label="亏损" icon={TrendingDown} colorClass="bg-red-900/40 text-red-400 border-red-500/30" />
+                <FilterChip type="RECOVERY" label="解套/回血" icon={RotateCcw} colorClass="bg-blue-900/40 text-blue-400 border-blue-500/30" />
+                <FilterChip type="HEDGE" label="防爆对冲" icon={Shield} colorClass="bg-indigo-900/40 text-indigo-400 border-indigo-500/30" />
+                <FilterChip type="MARTIN" label="马丁" icon={Zap} colorClass="bg-pink-900/40 text-pink-400 border-pink-500/30" />
+            </div>
+
+            {/* Stats Summary Bar */}
+            <div className="flex items-center gap-6 px-4 py-2 bg-slate-900/50 rounded border border-slate-800 text-xs">
+                <div className="flex items-center gap-2">
+                    <span className="text-slate-500">当前筛选:</span>
+                    <span className="text-white font-bold">{stats.count} 笔</span>
+                </div>
+                <div className="h-3 w-px bg-slate-700"></div>
+                <div className="flex items-center gap-2">
+                    <span className="text-slate-500">累计盈亏:</span>
+                    <span className={`font-mono font-bold text-sm ${stats.totalPnL >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {stats.totalPnL > 0 ? '+' : ''}{stats.totalPnL.toFixed(2)} U
+                    </span>
+                </div>
+                <div className="h-3 w-px bg-slate-700"></div>
+                <div className="flex items-center gap-2">
+                    <span className="text-slate-500">胜率 (Win Rate):</span>
+                    <span className={`font-mono font-bold ${stats.winRate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {stats.winRate.toFixed(1)}%
+                    </span>
+                </div>
+            </div>
         </div>
 
         {/* Content */}
@@ -184,7 +274,20 @@ const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, on
                                          )}
                                      </td>
                                      <td className="px-4 py-3 font-bold text-slate-200">
-                                         {log.symbol}
+                                         <div className="flex items-center gap-2">
+                                            <span>{log.symbol}</span>
+                                            <button 
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSearchTerm(log.symbol);
+                                                setActiveFilter('ALL'); // Reset filter to find all for this symbol
+                                              }}
+                                              className="p-1 hover:bg-slate-700 rounded text-slate-500 hover:text-blue-400 transition-all"
+                                              title="筛选此币种所有记录"
+                                            >
+                                              <History size={12} />
+                                            </button>
+                                         </div>
                                          <div className="text-[10px] text-slate-500 font-mono font-normal">{log.entry_id.slice(-6)}</div>
                                      </td>
                                      <td className={`px-4 py-3 text-xs ${log.direction === PositionSide.LONG ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -224,7 +327,7 @@ const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, on
                                              <div className="flex items-center gap-1">
                                                  {isGrouped && <Link size={10} className="text-indigo-400" />}
                                                  <span className="text-slate-300 bg-slate-800/50 px-1.5 py-0.5 rounded border border-slate-700/50" title={log.exit_reason}>
-                                                     {log.exit_reason ? (log.exit_reason.length > 10 ? log.exit_reason.substring(0, 10) + '...' : log.exit_reason) : '-'}
+                                                     {log.exit_reason ? (log.exit_reason.length > 15 ? log.exit_reason.substring(0, 15) + '...' : log.exit_reason) : '-'}
                                                  </span>
                                              </div>
                                          )}
@@ -240,7 +343,7 @@ const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, on
                                  </tr>
                              );
                          })}
-                         {groupedLogs.length === 0 && <tr><td colSpan={9} className="text-center py-10 text-slate-600">暂无开/平仓记录</td></tr>}
+                         {groupedLogs.length === 0 && <tr><td colSpan={9} className="text-center py-10 text-slate-600">没有符合筛选条件的记录</td></tr>}
                      </tbody>
                  </table>
             </div>
@@ -324,18 +427,22 @@ const TradeLogModal: React.FC<Props> = ({ tradeLogs, positions, systemEvents, on
                                 <div className="bg-slate-950 p-2 rounded border border-slate-700">
                                     <div className="flex justify-between text-xs mb-1">
                                         <span className="text-slate-400">触发条件:</span>
-                                        <span className="text-emerald-400">{selectedLog.signal_details.condition_met}</span>
+                                        <span className="text-emerald-400">{selectedLog.signal_details.condition_met || selectedLog.signal_details.type || '-'}</span>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-300 mt-2">
-                                        <div>EMA10: {selectedLog.signal_details.ema10.toFixed(2)}</div>
-                                        <div>EMA20: {selectedLog.signal_details.ema20.toFixed(2)}</div>
-                                        <div>EMA30: {selectedLog.signal_details.ema30.toFixed(2)}</div>
-                                        <div>EMA40: {selectedLog.signal_details.ema40.toFixed(2)}</div>
-                                    </div>
-                                    <div className="mt-2 text-xs border-t border-slate-800 pt-1 flex justify-between">
-                                        <span className="text-slate-500">24H成交额:</span>
-                                        <span className="text-slate-300">{(selectedLog.signal_details.volume_24h_usdt / 1000000).toFixed(2)}M</span>
-                                    </div>
+                                    {selectedLog.signal_details.ema10 && (
+                                        <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-300 mt-2">
+                                            <div>EMA10: {selectedLog.signal_details.ema10?.toFixed(2)}</div>
+                                            <div>EMA20: {selectedLog.signal_details.ema20?.toFixed(2)}</div>
+                                            <div>EMA30: {selectedLog.signal_details.ema30?.toFixed(2)}</div>
+                                            <div>EMA40: {selectedLog.signal_details.ema40?.toFixed(2)}</div>
+                                        </div>
+                                    )}
+                                    {selectedLog.signal_details.trigger_reason && (
+                                        <div className="mt-2 text-xs border-t border-slate-800 pt-1">
+                                            <span className="text-slate-500">原因:</span>
+                                            <span className="text-amber-400 ml-1">{selectedLog.signal_details.trigger_reason}</span>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}

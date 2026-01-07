@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Dashboard from './components/Dashboard';
 import SettingsPanel from './components/SettingsPanel';
 import ScannerDashboard from './components/ScannerDashboard';
@@ -6,123 +7,94 @@ import Logs from './components/Logs';
 import TradeLogModal from './components/TradeLogModal';
 import SourceCodeModal from './components/SourceCodeModal';
 import { MarketSimulator } from './services/marketSimulator';
+import { BackgroundTimer } from './services/backgroundTask'; // Import Worker Timer
+import { audioService } from './services/audioService'; // Import Audio Service
 import { AppSettings, Position, AccountData, LogEntry, TradeLog, SimulationSettings, PositionSide, ScannerSettings, ALL_BINANCE_SYMBOLS, SystemEvent, BackupData, STATIC_PRICES } from './types';
-import { Shield, Activity, Lock, MessageSquare, Download } from 'lucide-react';
+import { Shield, Activity, Lock, MessageSquare, Zap, BatteryCharging, Power, Sun } from 'lucide-react';
 
-// --- ABSOLUTE DEFENSE VERSION (12.08 02:20) ---
-// Priority: Capital Preservation > Profit Taking
 const INITIAL_SETTINGS: AppSettings = {
     audio: { 
         enabled: true,
-        // NEW 3-LEVEL CONFIG
         positionSize: { voice: true, popup: true, levels: [1000, 5000, 10000] },
         symbolProfit: { voice: true, popup: false, levels: [5, 10, 20] },
         totalProfit:  { voice: true, popup: true, levels: [1, 5, 10] },
         symbolLoss:   { voice: true, popup: true, levels: [5, 10, 20] },
         totalLoss:    { voice: true, popup: true, levels: [1, 5, 10] },
-        marginRatio:  { voice: true, popup: true, levels: [80, 50, 30] } // Alert when < 80%, < 50%, < 30%
+        marginRatio:  { voice: true, popup: true, levels: [80, 50, 30] }
     },
     profit: {
         enabled: false, 
         profitMode: 'CONVENTIONAL',
-        
-        // 1. 常规止盈
-        conventional: { 
-            minPosition: 100, 
-            profitPercent: 1, 
-            callbackPercent: 0, 
-            closePercent: 100 
-        },
-
-        // 2. 动态止盈 (阶梯)
+        conventional: { minPosition: 100, profitPercent: 1, callbackPercent: 0, closePercent: 100 },
         dynamic: { 
             minPosition: 100,
             tiers: [
-                { profit: 4, callback: 50, close: 100 },  // 4% profit, 50% callback -> close at 2%
-                { profit: 6, callback: 40, close: 100 },  // 6% profit, 40% callback -> close at 3.6%
-                { profit: 10, callback: 30, close: 100 }, // 10% profit, 30% callback -> close at 7%
-                { profit: 15, callback: 20, close: 100 }  // 15% profit, 20% callback -> close at 12%
+                { profit: 4, callback: 50, close: 100 },
+                { profit: 6, callback: 40, close: 100 },
+                { profit: 10, callback: 30, close: 100 },
+                { profit: 15, callback: 20, close: 100 }
             ]
         },
-
-        // 3. 智能止盈
-        smart: { 
-            activationProfit: 10 
-        },
-
-        // 4. 全局止盈
-        global: { 
-            profitPercent: 0,
-            lossPercent: 0,
-            profitAmount: 0,
-            lossAmount: 0
-        },
-
-        // 5. 止损平仓 (Module 2 Internal)
-        stopLoss: {
-            enabled: false,
-            minPosition: 100,
-            lossPercent: 10,
-            closePercent: 100
-        }
+        smart: { activationProfit: 10 },
+        global: { profitPercent: 0, lossPercent: 0, profitAmount: 0, lossAmount: 0 },
+        stopLoss: { enabled: false, minPosition: 100, lossPercent: 10, closePercent: 100 }
     },
     stopLoss: { 
         enabled: true, 
         lossThreshold: 20, 
         positionThreshold: 50,
-        // Module 4 Advanced Profit Exit Features
         originalProfitClear: false,
-        hedgeStopLossPercent: 1, // Default to 1%
-        originalCoverPercent: 50, // Default to 50%
-
+        hedgeStopLossPercent: 1,
+        originalCoverPercent: 50,
         hedgeProfitClear: false,
-        hedgeOpenRatio: 150,
+        hedgeOpenRatio: 150,  // Modified: Default 150% for Strategy 4.2
         hedgeCoverPercent: 5,
-        hedgeProfitClearStopLoss: 1, // NEW: Default 1%
-
+        hedgeProfitClearStopLoss: 1,
         callbackProfitClear: false,
-        callbackTargetProfit: 2, // Default to 2%
-        callbackRate: 1, // Default to 1%
-        callbackStopLoss: 1, // Default to 1%
-        callbackCoverPercent: 5 // UPDATED: Default to 5% to ensure strict execution
+        callbackTargetProfit: 2,
+        callbackRate: 1,
+        callbackStopLoss: 1,
+        callbackCoverPercent: 5,
+        callbackHedgeRatio: 150 // Modified: Default 150% for Strategy 4.3
     }, 
     hedging: { 
         enabled: true, 
-        triggerLossPercent: 1, // Default to 1%
-        hedgeRatio: 100, // 100% per request
-        minPosition: 1000, // 1000U per request
-        
-        // NEW SAFE CLEAR SETTINGS
+        triggerLossPercent: 1,
+        hedgeRatio: 100,
+        minPosition: 1000,
         safeClearEnabled: false,
         safeClearProfit: 10,
         safeClearLoss: 10
     },
-    victoryOut: { 
-        enabled: false, // Disabled in Defense Version
-        activationProfit: 0.8, 
-        retraceCallback: 0.1 
+    martingale: {
+        enabled: false,
+        dropPercent: 1.0,
+        volumeMultiplier: 1.5,
+        maxSteps: 5,
+        takeProfit: 1.0,
+        firstBuyAmount: 0, // Default 0 (Use current position size)
+        direction: 'BOTH', // Default BOTH
+        isRunning: false // Default Stopped
     },
+    victoryOut: { enabled: false, activationProfit: 0.8, retraceCallback: 0.1 },
     winningOut: { enabled: true, disableOtherCloseOnHedge: true },
     simulation: {
-        // Advanced Filter Defaults
-        filterTimeBasis: '8AM', // Default to Today 8AM
-        filterMinVolume: 10, // Default 10 Million USDT
-        filterMinChangeUp: 3,
+        filterTimeBasis: '24H', // Modified: Default to 24H
+        filterMinVolume: 1,     // Modified: Default to 1M
+        filterMinChangeUp: 1,   // Modified: Default to 1%
         filterMinChangeDown: 3,
         filterSort: 'DESC',
-        selectCount: 60, // UPDATED: Default 60 items
+        selectCount: 100,       // Modified: Default to 100
         executionDirection: 'LONG',
-        scanSource: 'GAINERS', // Default scan source
-        positionSize: 10000, // UPDATED: Default 10000 USDT
-        takeProfitPercent: 2, // UPDATED: Back to 2% for quick simulation
-        autoReopen: false,
-
-        // Legacy defaults
+        scanSource: 'GAINERS',
+        positionSize: 10000,
+        takeProfitPercent: 2,
+        autoReopen: true,       // Modified: Default to true (Loop)
         symbol: 'BTCUSDT',
         batchDirection: 'RANDOM',
         batchCount: 3, 
         batchPositionSize: 500,
-        batchTpPercent: 2, // Back to 2%
+        batchTpPercent: 2,
         batchAutoReopen: false,
         batchSource: 'POOL',
         batchTimeBasis: '24H',
@@ -143,14 +115,9 @@ const INITIAL_SETTINGS: AppSettings = {
         autoOpen: false,
         openAmount: 100,
         scanTimeframes: ['15m', '4h']
-    }
+    },
+    system: { binanceApiKey: '', binanceApiSecret: '' }
 };
-
-interface Notification {
-    id: number;
-    title: string;
-    message: string;
-}
 
 const App: React.FC = () => {
     const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
@@ -159,452 +126,294 @@ const App: React.FC = () => {
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
     const [systemEvents, setSystemEvents] = useState<SystemEvent[]>([]);
-    
-    // Global Real Price Cache (Shared State)
-    const [realPrices, setRealPrices] = useState<Record<string, number>>({});
-    
-    // Notifications State Kept but UI removed as per request
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    
+    const [realPrices, setRealPrices] = useState<Record<string, number>>(STATIC_PRICES);
     const [isSimulating, setIsSimulating] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
-    const [showLogs, setShowLogs] = useState(false); // Bottom Panel
-    const [showTradeModal, setShowTradeModal] = useState(false); // Full Modal
-    const [tradeLogFilter, setTradeLogFilter] = useState(''); // Added Filter State
-    const [showSourceModal, setShowSourceModal] = useState(false); // New Source Code Modal
+    const [showLogs, setShowLogs] = useState(true);
+    const [showTradeModal, setShowTradeModal] = useState(false);
+    const [tradeLogFilter, setTradeLogFilter] = useState('');
+    const [showSourceModal, setShowSourceModal] = useState(false);
     
-    // UI Feedback state
-    const [isRestoring, setIsRestoring] = useState(false);
-    const [isBackingUp, setIsBackingUp] = useState(false);
+    // Background Mode & Wake Lock Status
+    const [bgModeActive, setBgModeActive] = useState(false);
+    const [wakeLockActive, setWakeLockActive] = useState(false);
+    const wakeLockRef = useRef<any>(null);
     
-    // Mutable refs
     const positionsRef = useRef(positions);
-    const accountRef = useRef(account);
-    const logsRef = useRef(logs);
-    const tradeLogsRef = useRef(tradeLogs);
-    
-    // Sync refs
-    useEffect(() => { positionsRef.current = positions; }, [positions]);
-    useEffect(() => { accountRef.current = account; }, [account]);
-    useEffect(() => { logsRef.current = logs; }, [logs]);
-    useEffect(() => { tradeLogsRef.current = tradeLogs; }, [tradeLogs]);
-
+    const isSimulatingRef = useRef(isSimulating);
     const simulatorRef = useRef<MarketSimulator | null>(null);
 
-    const addNotification = (title: string, message: string) => {
-        const id = Date.now();
-        setNotifications(prev => [...prev, { id, title, message }]);
-        setTimeout(() => {
-            setNotifications(prev => prev.filter(n => n.id !== id));
-        }, 5000);
-    };
+    // Timing & Worker Refs
+    const backgroundTimerRef = useRef<BackgroundTimer | null>(null);
+    const lastFastLoopTime = useRef(0);
+    const isFastLoopRunning = useRef(false);
+    const isSlowLoopRunning = useRef(false);
 
-    // Initialization
+    useEffect(() => { positionsRef.current = positions; }, [positions]);
+    useEffect(() => { isSimulatingRef.current = isSimulating; }, [isSimulating]);
+
+    // 初始化 Simulator
     useEffect(() => {
         simulatorRef.current = new MarketSimulator(
-            accountRef.current,
-            positionsRef.current,
-            settings,
-            (acc, pos, lgs, hedge, tLogs, evts, notif) => {
+            account, positions, settings,
+            (acc, pos, lgs, hedge, tLogs) => {
                 setAccount({...acc});
                 setPositions([...pos]);
-                if (lgs.length !== logsRef.current.length) setLogs([...lgs]);
-                if (tLogs && tLogs.length !== tradeLogsRef.current.length) setTradeLogs([...tLogs]);
-                if (notif) addNotification(notif.title, notif.message);
+                if (lgs) setLogs([...lgs]);
+                if (tLogs) setTradeLogs([...tLogs]);
             },
-            tradeLogsRef.current,
-            systemEvents,
-            logsRef.current
+            tradeLogs, systemEvents, logs
         );
-        
-        // Initial Log - Restored Format
-        setLogs(prev => [{
-            id: 'init',
-            timestamp: new Date(),
-            type: 'INFO',
-            message: 'System Online - Absolute Defense Mode (v12.08.0220)'
-        }, ...prev]);
-
-        // --- NEW: FETCH REAL PRICES ON STARTUP & POLL INTERVAL ---
-        const fetchPrices = async () => {
-            const endpoints = [
-                'https://data-api.binance.vision/api/v3/ticker/price',
-                'https://api.binance.com/api/v3/ticker/price',
-                'https://api-gcp.binance.com/api/v3/ticker/price',
-                'https://api.mexc.com/api/v3/ticker/price' // Fallback to MEXC
-            ];
-
-            for (const ep of endpoints) {
-                try {
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
-                    
-                    const res = await fetch(ep, { signal: controller.signal });
-                    clearTimeout(timeoutId);
-
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (Array.isArray(data)) {
-                            const priceMap: Record<string, number> = {};
-                            data.forEach((t: any) => {
-                                if (t.symbol && t.symbol.endsWith('USDT') && t.price) {
-                                    priceMap[t.symbol] = parseFloat(t.price);
-                                }
-                            });
-                            if (Object.keys(priceMap).length > 0) return priceMap;
-                        }
-                    }
-                } catch (e) {
-                    // Fail silently to try next endpoint
-                }
-            }
-            // CRITICAL FIX: Return null instead of fallback to prevent data corruption
-            return null;
-        };
-
-        const runPriceUpdate = () => {
-             fetchPrices()
-            .then(priceMap => {
-                if (priceMap) {
-                    setRealPrices(priceMap); // Store in React State
-                    if (simulatorRef.current) {
-                        simulatorRef.current.updateRealPrices(priceMap); // Push to Simulator
-                    }
-                }
-                // If priceMap is null (all failed), DO NOTHING. Keep the old prices.
-                // Do NOT revert to STATIC_PRICES.
-            })
-            .catch(err => {
-                console.warn("Price update skipped (Network Error). Keeping previous prices.");
-            });
-        };
-
-        // 1. Run Immediately
-        runPriceUpdate();
-        
-        // 2. Poll every 1 second (High Frequency Update)
-        const pollInterval = setInterval(runPriceUpdate, 1000);
-
-        return () => clearInterval(pollInterval);
-
+        // Feed initial static prices to simulator
+        simulatorRef.current.updateRealPrices(STATIC_PRICES);
     }, []);
 
-    // Simulation Loop
-    useEffect(() => {
-        let interval: any;
-        if (isSimulating && simulatorRef.current) {
-            interval = setInterval(() => {
-                simulatorRef.current?.tick();
-            }, 1000); 
-        }
-        return () => clearInterval(interval);
-    }, [isSimulating]);
-
-    // Sync settings
-    useEffect(() => {
-        if (simulatorRef.current) {
-            simulatorRef.current.updateSettings(settings);
-        }
-    }, [settings]);
-
-
-    const handleBatchOpen = (simSettings: SimulationSettings) => {
-        if (!simulatorRef.current) return;
-        simulatorRef.current.openBatchPositions(
-            simSettings.symbol,
-            simSettings.batchDirection,
-            simSettings.batchCount,
-            simSettings.batchPositionSize,
-            simSettings.batchTpPercent, 
-            simSettings.batchAutoReopen, 
-            simSettings.batchSource, 
-            simSettings.batchTimeBasis, 
-            simSettings.batchMinVolume, 
-            simSettings.customCandidates,
-            simSettings.customPrices // PASSED PRICES
-        );
-    };
-
-    const handleSettingsChange = (section: keyof AppSettings, key: string, value: any) => {
-        setSettings(prev => ({
-            ...prev,
-            [section]: {
-                ...prev[section],
-                [key]: value
+    // --- Wake Lock API Implementation ---
+    const requestWakeLock = async () => {
+        try {
+            if ('wakeLock' in navigator) {
+                // If already active, don't re-request unless necessary, but logic here allows retry
+                const lock = await (navigator as any).wakeLock.request('screen');
+                wakeLockRef.current = lock;
+                setWakeLockActive(true);
+                
+                lock.addEventListener('release', () => {
+                    setWakeLockActive(false);
+                    console.log('Wake Lock released');
+                });
+                console.log('Wake Lock active');
             }
-        }));
-    };
-    
-    const handleUpdateLeverage = (symbol: string, side: PositionSide, currentLeverage: number) => {
-        const input = window.prompt(`修改 ${symbol} (${side}) 杠杆倍数:`, currentLeverage.toString());
-        if (input !== null) {
-            const newLev = parseInt(input, 10);
-            if (!isNaN(newLev) && newLev > 0 && newLev <= 125) {
-                simulatorRef.current?.updateLeverage(symbol, side, newLev);
+        } catch (err: any) {
+            // Fix: Handle policy error gracefully to prevent crash/console spam
+            if (err.name === 'NotAllowedError') {
+                console.warn('Wake Lock request denied by permissions policy. Keeping screen on is disabled.');
+                // Do not retry repeatedly if denied
             } else {
-                alert('无效的杠杆倍数 (1-125)');
+                console.error('Wake Lock failed:', err);
             }
+            setWakeLockActive(false);
         }
     };
 
-    // --- BACKUP & RESTORE SYSTEM ---
-    
-    const getBackupData = (): BackupData => ({
-        version: "v12.08.0220",
-        timestamp: new Date().toISOString(),
-        settings,
-        account,
-        positions,
-        tradeLogs,
-        logs,
-        systemEvents
-    });
-
-    const restoreFromData = (data: BackupData, sourceName: string) => {
-        try {
-            if (data.settings) setSettings(data.settings);
-            if (data.account) setAccount(data.account);
-            if (data.positions) setPositions(data.positions);
-            if (data.tradeLogs) setTradeLogs(data.tradeLogs);
-            if (data.logs) setLogs(prev => [...data.logs, ...prev]); // Append logs
-            
-            setLogs(prev => [{
-                id: Math.random().toString(),
-                timestamp: new Date(),
-                type: 'SUCCESS',
-                message: `成功从 ${sourceName} 恢复数据。`,
-            }, ...prev]);
-        } catch (e) {
-            setLogs(prev => [{
-                id: Math.random().toString(),
-                timestamp: new Date(),
-                type: 'DANGER',
-                message: `数据恢复失败: 无效的格式。`,
-            }, ...prev]);
-        }
+    // Manual Trigger for Background Mode (Audio + WakeLock)
+    const handleManualBackgroundActivation = () => {
+        audioService.enableBackgroundMode();
+        setBgModeActive(true);
+        requestWakeLock();
     };
 
-    const handleLocalBackup = () => {
-        setIsBackingUp(true);
-        const backup = getBackupData();
-        localStorage.setItem('risk_savior_full_backup', JSON.stringify(backup));
-        
-        setLogs(prev => [{
-            id: Math.random().toString(),
-            timestamp: new Date(),
-            type: 'SUCCESS',
-            message: '系统快照已保存至本地缓存。'
-        }, ...prev]);
-        setTimeout(() => setIsBackingUp(false), 800);
-    };
-
-    const handleLocalRestore = () => {
-        setIsRestoring(true);
-        const raw = localStorage.getItem('risk_savior_full_backup');
-        if (raw) {
-            const data = JSON.parse(raw) as BackupData;
-            restoreFromData(data, '本地缓存');
-        } else {
-            setLogs(prev => [{
-                id: Math.random().toString(),
-                timestamp: new Date(),
-                type: 'WARNING',
-                message: '未发现本地备份文件。'
-            }, ...prev]);
-        }
-        setTimeout(() => setIsRestoring(false), 1000);
-    };
-
-    const handleExportBackup = () => {
-        try {
-            const data = getBackupData();
-            const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none'; // Hidden anchor
-            a.href = url;
-            a.download = `risk_savior_backup_${new Date().toISOString().slice(0,10)}.json`;
-            document.body.appendChild(a);
-            a.click();
-            
-            // Clean up with delay to ensure download starts
-            setTimeout(() => {
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-            }, 100);
-            
-            setLogs(prev => [{
-                id: Math.random().toString(),
-                timestamp: new Date(),
-                type: 'SUCCESS',
-                message: '完整数据包导出成功。'
-            }, ...prev]);
-        } catch (err) {
-            console.error("Download Error:", err);
-            setLogs(prev => [{
-                id: Math.random().toString(),
-                timestamp: new Date(),
-                type: 'DANGER',
-                message: '导出失败：浏览器可能拦截了下载。'
-            }, ...prev]);
-        }
-    };
-
-    const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            try {
-                const json = JSON.parse(event.target?.result as string) as BackupData;
-                restoreFromData(json, 'JSON文件');
-            } catch (err) {
-                setLogs(prev => [{
-                    id: Math.random().toString(),
-                    timestamp: new Date(),
-                    type: 'DANGER',
-                    message: '导入失败：文件格式损坏。'
-                }, ...prev]);
+    // Re-request wake lock when visibility changes (if user tabs away and comes back)
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible' && !wakeLockActive) {
+                requestWakeLock();
             }
         };
-        reader.readAsText(file);
-        // Reset input
-        e.target.value = '';
-    };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [wakeLockActive]);
 
-    const handleFactoryReset = () => {
-        if (window.confirm('警告：确定要重置所有系统设置吗？当前持仓和记录将被保留，但策略配置将恢复默认。')) {
-            setSettings(INITIAL_SETTINGS);
-            setLogs(prev => [{
-                id: Math.random().toString(),
-                timestamp: new Date(),
-                type: 'WARNING',
-                message: '系统设置已重置为出厂默认 (Absolute Defense)。'
-            }, ...prev]);
+    // --- Background Worker & Audio Orchestration ---
+    useEffect(() => {
+        // 1. Initialize Background Timer (Worker)
+        backgroundTimerRef.current = new BackgroundTimer(() => {
+            handleTick();
+        });
+        
+        // 2. Start Timer
+        backgroundTimerRef.current.start();
+        
+        // 3. Enable Audio Keep Alive & Wake Lock on interaction
+        const enableBackgroundFeatures = () => {
+             audioService.enableBackgroundMode();
+             setBgModeActive(true);
+             requestWakeLock();
+             
+             // Remove listeners once enabled
+             document.removeEventListener('click', enableBackgroundFeatures);
+             document.removeEventListener('touchstart', enableBackgroundFeatures);
+             document.removeEventListener('keydown', enableBackgroundFeatures);
+        };
+        document.addEventListener('click', enableBackgroundFeatures);
+        document.addEventListener('touchstart', enableBackgroundFeatures);
+        document.addEventListener('keydown', enableBackgroundFeatures);
+
+        return () => {
+            backgroundTimerRef.current?.stop();
+            if (wakeLockRef.current) wakeLockRef.current.release();
+            document.removeEventListener('click', enableBackgroundFeatures);
+            document.removeEventListener('touchstart', enableBackgroundFeatures);
+            document.removeEventListener('keydown', enableBackgroundFeatures);
+        };
+    }, []);
+
+    // Central Tick Handler (Driven by Web Worker every 100ms)
+    const handleTick = () => {
+        const now = Date.now();
+        
+        // Watchdog: If loop stuck for > 10s, force reset
+        if (isFastLoopRunning.current && now - lastFastLoopTime.current > 10000) {
+             console.warn("Watchdog: Resetting stuck loop");
+             isFastLoopRunning.current = false;
+        }
+
+        // Execute Fast Loop Logic (Throttle to 1000ms = 1s)
+        if (now - lastFastLoopTime.current >= 1000 && !isFastLoopRunning.current) {
+            lastFastLoopTime.current = now;
+            runFastLoop();
+        } else if (simulatorRef.current && isSimulatingRef.current) {
+            // Check logic on minor ticks if needed
         }
     };
+
+    const runFastLoop = async () => {
+        isFastLoopRunning.current = true;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s Network Timeout
+
+        try {
+            // Only update active positions to save bandwidth/processing
+            const activeSymbols = Array.from(new Set(positionsRef.current.map(p => p.symbol)));
+            
+            if (activeSymbols.length > 0) {
+                const symbolParams = JSON.stringify(activeSymbols);
+                const targetedRes = await fetch(
+                    `https://fapi.binance.com/fapi/v1/ticker/price?symbols=${encodeURIComponent(symbolParams)}`, 
+                    { cache: 'no-store', signal: controller.signal }
+                );
+                
+                if (targetedRes.ok) {
+                    const tData = await targetedRes.json();
+                    const targetedPrices: Record<string, number> = {};
+                    tData.forEach((t: any) => { targetedPrices[t.symbol] = parseFloat(t.price); });
+                    
+                    if (simulatorRef.current) {
+                        simulatorRef.current.updateRealPrices(targetedPrices);
+                        simulatorRef.current.tick(isSimulatingRef.current);
+                    }
+                    
+                    setRealPrices(prev => ({ ...prev, ...targetedPrices }));
+                }
+            } else if (simulatorRef.current) {
+                // Keep engine alive for internal logic (auto-reopen queues, etc.)
+                simulatorRef.current.tick(isSimulatingRef.current);
+            }
+        } catch (e) {
+            // Ignore timeout/abort errors
+        } finally {
+            clearTimeout(timeoutId);
+            isFastLoopRunning.current = false;
+        }
+    };
+
+    useEffect(() => {
+        if (simulatorRef.current) simulatorRef.current.updateSettings(settings);
+    }, [settings]);
+
+    // Memoize callbacks to prevent child re-renders (Scanner resetting issue)
+    const handleBatchOpen = useCallback((simSettings: SimulationSettings) => {
+        simulatorRef.current?.openBatchPositions(
+            simSettings.symbol, simSettings.batchDirection, simSettings.batchCount,
+            simSettings.batchPositionSize, simSettings.batchTpPercent, 
+            simSettings.batchAutoReopen, simSettings.batchSource, 
+            simSettings.batchTimeBasis, simSettings.batchMinVolume, 
+            simSettings.customCandidates, simSettings.customPrices
+        );
+    }, []);
+
+    const handleScannerOpenPosition = useCallback((symbol: string, side: PositionSide, amount: number, price: number) => {
+        simulatorRef.current?.openPosition(symbol, side, amount, price, undefined, false, undefined, false, true);
+        if (!isSimulatingRef.current) {
+            setIsSimulating(true);
+            audioService.speak('系统已跟随开仓自动启动');
+        }
+    }, []);
+
+    const handleSettingsChange = useCallback((section: keyof AppSettings, key: string, value: any) => {
+        setSettings(prev => ({ ...prev, [section]: { ...prev[section], [key]: value } }));
+    }, []);
+
+    const handleToggleSim = useCallback(() => setIsSimulating(prev => !prev), []);
 
     return (
         <div className="flex flex-col h-screen bg-slate-950 text-white font-sans overflow-hidden">
-            {/* --- GLOBAL APP HEADER --- */}
             <header className="h-10 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 shrink-0 shadow-md z-50">
                 <div className="flex items-center gap-3">
-                    <div className="w-6 h-6 bg-indigo-600 rounded flex items-center justify-center shadow-lg shadow-indigo-900/50">
+                    <div className="w-6 h-6 bg-indigo-600 rounded flex items-center justify-center shadow-lg">
                         <Shield size={14} className="text-white" />
                     </div>
-                    <div>
-                        <h1 className="font-bold text-xs tracking-wide text-slate-100 flex items-center gap-2">
-                            防爆仓救世之星 
-                            <span className="px-1 py-0.5 bg-slate-800 text-slate-400 text-[9px] rounded border border-slate-700">v12.08.0220 (Defense)</span>
-                        </h1>
-                    </div>
+                    <h1 className="font-bold text-xs tracking-wide text-slate-100 flex items-center gap-2">
+                        防爆仓救世之星 <span className="text-[9px] text-slate-500">v12.25.0112 (Ultra-Low Latency Futures)</span>
+                    </h1>
                 </div>
-
-                <div className="flex items-center gap-4">
-                     <span className="text-[10px] text-slate-500 flex items-center gap-1 border-r border-slate-800 pr-4"><Lock size={10} className="text-emerald-500"/> Core: Protected</span>
-                     
-                     {/* GLOBAL DOWNLOAD BUTTON */}
-                     <button 
-                        onClick={handleExportBackup}
-                        className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-blue-400 transition-colors"
-                        title="导出系统数据备份 (Export Data)"
-                     >
-                         <Download size={12} />
-                         <span className="hidden md:inline">导出数据</span>
-                     </button>
+                {/* Background Mode & Wake Lock Indicator */}
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={requestWakeLock}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[9px] font-bold transition-all cursor-pointer ${wakeLockActive ? 'bg-amber-900/20 border-amber-500/30 text-amber-400' : 'bg-slate-800/50 border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`} 
+                        title="点击尝试激活屏幕常亮"
+                    >
+                        <Sun size={10} />
+                        {wakeLockActive ? '屏幕常亮: ON' : '屏幕常亮: OFF'}
+                    </button>
+                    <button 
+                        onClick={handleManualBackgroundActivation}
+                        className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[9px] font-bold transition-all cursor-pointer ${bgModeActive ? 'bg-emerald-900/20 border-emerald-500/30 text-emerald-400' : 'bg-slate-800/50 border-slate-700 text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}
+                        title="点击手动激活后台保活"
+                    >
+                        {bgModeActive ? <Zap size={10} fill="currentColor" /> : <Power size={10} />}
+                        {bgModeActive ? '后台保活: 已激活' : '后台保活: 点击激活'}
+                    </button>
                 </div>
             </header>
 
-            {/* Main Content Area - Left Sidebar Layout */}
             <div className="flex-1 flex min-h-0 flex-row relative">
-                {/* LEFT SIDEBAR SETTINGS */}
                 <div className="w-80 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col z-20 shadow-xl">
                     <SettingsPanel 
-                        settings={settings}
-                        realPrices={realPrices} // PASS REAL PRICES
+                        settings={settings} realPrices={realPrices}
                         previewData={ALL_BINANCE_SYMBOLS.map(s => ({ symbol: s }))} 
                         handleChange={handleSettingsChange}
                         onBatchOpen={handleBatchOpen}
-                        onBackup={handleLocalBackup}
-                        onRestore={handleLocalRestore}
-                        onExport={handleExportBackup}
-                        onImport={handleImportBackup}
-                        onFactoryReset={handleFactoryReset}
-                        isBackingUp={isBackingUp}
-                        isRestoring={isRestoring}
+                        onFactoryReset={() => {}} 
                         onOpenScanner={() => setShowScanner(true)}
-                        onToggleSim={() => setIsSimulating(!isSimulating)}
+                        onToggleSim={handleToggleSim}
                         isSimulating={isSimulating}
-                        systemStats={{
-                            balance: account.marginBalance,
-                            positionCount: positions.length,
-                            tradeCount: tradeLogs.length,
-                            logCount: logs.length
-                        }}
+                        systemStats={{ balance: account.marginBalance, positionCount: positions.length, tradeCount: tradeLogs.length, logCount: logs.length }}
                         onViewSource={() => setShowSourceModal(true)}
                     />
                 </div>
 
-                {/* RIGHT MAIN DASHBOARD */}
                 <div className="flex-1 flex flex-col min-w-0 p-2 gap-2 bg-slate-950">
                     <div className="flex-1 min-h-0">
                         <Dashboard 
-                            account={account}
-                            positions={positions}
-                            onRowLongPress={() => {}}
-                            onShowHistory={() => {}}
-                            hasHistory={() => false}
+                            account={account} positions={positions} tradeLogs={tradeLogs}
+                            onRowLongPress={() => {}} onShowHistory={() => {}} hasHistory={() => false}
                             onClearPositions={() => simulatorRef.current?.batchCloseAllPositions()}
                             onClosePosition={(sym, side) => simulatorRef.current?.closePosition(sym, side)}
                             onDeletePosition={(sym, side) => simulatorRef.current?.closePosition(sym, side, 'REMOVE')}
                             onBatchClose={() => simulatorRef.current?.batchCloseAllPositions()}
-                            onOpenChart={() => {}}
-                            onOpenLogs={() => setShowLogs(!showLogs)}
+                            onOpenChart={() => {}} onOpenLogs={() => setShowLogs(!showLogs)}
                             onOpenTradeModal={() => { setTradeLogFilter(''); setShowTradeModal(true); }}
-                            isSimulating={isSimulating}
-                            onToggleSimulation={() => setIsSimulating(!isSimulating)}
-                            onShowSymbolTradeLogs={(symbol) => {
-                                setTradeLogFilter(symbol);
-                                setShowTradeModal(true);
-                            }}
+                            isSimulating={isSimulating} onToggleSimulation={handleToggleSim}
+                            onShowSymbolTradeLogs={(symbol) => { setTradeLogFilter(symbol); setShowTradeModal(true); }}
                             onEmergencyHedge={() => simulatorRef.current?.triggerEmergencyHedge()}
                             onOpenScanner={() => setShowScanner(true)}
-                            onUpdateLeverage={handleUpdateLeverage}
+                            onUpdateLeverage={(sym, side, lev) => simulatorRef.current?.updateLeverage(sym, side, lev)}
                         />
                     </div>
-                    {showLogs && (
-                        <div className="h-48 shrink-0">
-                            <Logs logs={logs} />
-                        </div>
-                    )}
+                    {showLogs && <div className="h-48 shrink-0"><Logs logs={logs} /></div>}
                 </div>
                 
-                {/* MODALS */}
-                {showTradeModal && (
-                    <TradeLogModal 
-                        tradeLogs={tradeLogs} 
-                        positions={positions}
-                        systemEvents={systemEvents} 
-                        onClose={() => setShowTradeModal(false)} 
-                        initialSearch={tradeLogFilter}
-                    />
-                )}
-
-                {showSourceModal && (
-                    <SourceCodeModal onClose={() => setShowSourceModal(false)} />
-                )}
+                {showTradeModal && <TradeLogModal tradeLogs={tradeLogs} positions={positions} systemEvents={systemEvents} onClose={() => setShowTradeModal(false)} initialSearch={tradeLogFilter} />}
+                {showSourceModal && <SourceCodeModal onClose={() => setShowSourceModal(false)} />}
             </div>
             
             {showScanner && (
                 <ScannerDashboard 
-                    settings={settings.scanner}
-                    onClose={() => setShowScanner(false)}
-                    onOpenPosition={(symbol, side, amount, price) => {
-                        // Pass "isQuantityBase" = true to interpret amount as USDT not coin qty
-                        simulatorRef.current?.openPosition(symbol, side, amount, price, undefined, false, undefined, false, true);
-                    }}
-                    realPrices={realPrices}
+                    settings={settings.scanner} 
+                    onClose={() => setShowScanner(false)} 
+                    onOpenPosition={handleScannerOpenPosition} 
+                    realPrices={realPrices} 
                 />
             )}
         </div>
