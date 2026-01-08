@@ -263,7 +263,7 @@ const SettingsPanel: React.FC<Props> = ({ settings, realPrices, previewData, han
 
                             <div className="bg-slate-800/50 p-2 rounded border border-slate-700">
                                 <span className="text-amber-400 font-bold block mb-1">3. 最终胜利 (Victory)</span>
-                                当【历史累计对冲盈利 + 当前对冲浮盈 + 原仓当前浮盈】 > 【最大债务 * (1+覆盖阈值)】时，执行全平。
+                                当【历史累计对冲盈利 + 当前对冲浮盈 + 原仓当前浮盈】 &gt; 【最大债务 * (1+覆盖阈值)】时，执行全平。
                                 <br/><span className="text-slate-500 mt-1 block">* 注：若原仓位盈利足以覆盖历史亏损，也会触发全平。</span>
                             </div>
                         </div>
@@ -644,7 +644,7 @@ const SettingsPanel: React.FC<Props> = ({ settings, realPrices, previewData, han
                                     </div>
                                 </div>
                                 <div className="text-[9px] text-slate-500 bg-slate-800/50 p-1.5 rounded leading-relaxed border border-slate-700/30">
-                                    对冲盈利达标后回调收割，或止损控制。利润积攒至总子弹 > 亏损 * (1+阈值) 时清仓。
+                                    对冲盈利达标后回调收割，或止损控制。利润积攒至总子弹 &gt; 亏损 * (1+阈值) 时清仓。
                                 </div>
                             </div>
                         )}

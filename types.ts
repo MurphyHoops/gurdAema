@@ -29,6 +29,13 @@ export interface Position {
   mainPositionId?: string; // If this is a hedge, link to parent
   entryTime?: number;
   cumulativeHedgeLoss?: number; // NEW: Tracks sum of losses from previous failed hedges
+  cumulativeHedgeProfit?: number;
+  hedgeLossCount?: number;
+  extremePrice?: number;
+  isMartinActive?: boolean;
+  martinStep?: number;
+  lastRefillPrice?: number;
+  lastRefillAmount?: number;
 }
 
 export interface LogEntry {
@@ -132,6 +139,7 @@ export interface StopLossSettings {
     callbackRate: number;
     callbackStopLoss: number;
     callbackCoverPercent: number;
+    callbackHedgeRatio?: number;
 }
 
 export interface HedgingSettings {
@@ -184,6 +192,17 @@ export interface SmartTradeSettings {
   enabled: boolean;
 }
 
+export interface MartingaleSettings {
+  enabled: boolean;
+  dropPercent: number;
+  volumeMultiplier: number;
+  maxSteps: number;
+  takeProfit: number;
+  firstBuyAmount: number;
+  direction: 'LONG' | 'SHORT' | 'BOTH';
+  isRunning: boolean;
+}
+
 export interface ScannerSettings {
     volumeThreshold: number;
     changeFrom8amUp: number;
@@ -220,11 +239,18 @@ export interface AppSettings {
     profit: ProfitSettings;
     stopLoss: StopLossSettings;
     hedging: HedgingSettings;
+    martingale: MartingaleSettings;
     victoryOut: VictoryOutSettings;
     winningOut: WinningOutSettings;
     simulation: SimulationSettings;
     smartTrade: SmartTradeSettings;
     scanner: ScannerSettings;
+    system?: SystemSettings;
+}
+
+export interface SystemSettings {
+    binanceApiKey: string;
+    binanceApiSecret: string;
 }
 
 export interface BackupData {
